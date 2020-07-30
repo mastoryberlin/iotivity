@@ -3,6 +3,7 @@ require "log"
 require "./bindings"
 require "./device"
 require "./client"
+require "./server"
 
 # Base namespace containing all IoTivity-related classes.
 module IoTivity

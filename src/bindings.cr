@@ -1,8 +1,11 @@
+require "./helper"
+
 # =============================================================================
 # C bindings for OCF/IoTivity
 # =============================================================================
 
-@[Link(ldflags: "-DOC_CLIENT -I/home/pi/iot-lite/iotivity-lite -I/home/pi/iot-lite/iotivity-lite/include -I/home/pi/iot-lite/iotivity-lite/port/linux /home/pi/iot-lite/iotivity-lite/port/linux/libiotivity-lite-client.a")]
+@[Link(ldflags: "-DOC_CLIENT -DOC_SERVER -DOC_SECURITY -DOC_PKI -DNO_MAIN \
+                 -liotivity-lite-client -liotivity-lite-server")]
 lib OC
 
   # =======================================================================================
@@ -177,6 +180,7 @@ lib OC
     init : -> LibC::Int
     signal_event_loop : -> Void
     requests_entry : -> Void
+    register_resources : -> Void
   end
 
   union RepValue
