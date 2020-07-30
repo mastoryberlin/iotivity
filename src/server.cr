@@ -16,8 +16,6 @@ module IoTivity
     # =========================================================================
 
     macro included
-      # This is for the device builder
-      # @[Link(ldflags: "-DNO_MAIN -lwiringPi /home/pi/oic.d.magicstone/src/oic.d.magicstone.c")]
 
       # Sets up and runs the IoTivity server.
       def run_server(storage_dir)

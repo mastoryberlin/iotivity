@@ -1,32 +1,41 @@
 require "event_handler"
-require "iotivity"
 require "log"
 require "uuid"
 
-require "./helper"
+require "./resource"
+require "./device"
 
 module IoTivity
 
-  # An IoTivity client.
-  class Client
+  # Mix-in to create an IoTivity client.
+  module Client
     include EventHandler
 
     # =======================================================================================
     # Constants
     # =======================================================================================
 
-    Log = ::Log.for(self)
+    Log = ::Log.for("IoTivity::Client")
 
     # =======================================================================================
     # Events
     # =======================================================================================
 
-    event Discovery, device : Device
+    event Discovery, di : UUID, resource : Resource, endpoints : ListOfEndpoints
     event Response, from : OC::Endpoint*, code : OC::Status, payload : OC::Rep*
 
     # =======================================================================================
     # Properties
     # =======================================================================================
+
+    # The device associated with the client itself. Needed for onboarding.
+    property myself do
+      oc_uuid = OC.core_get_device_id(0).value.id
+      uuid = UUID.new oc_uuid
+      Device.new uuid, Pointer(OC::Endpoint).null
+    end
+
+    # ---------------------------------------------------------------------------------------
 
     # A list of all devices discovered.
     property discovered = [] of Device
@@ -40,6 +49,10 @@ module IoTivity
     # Class variables
     # =======================================================================================
 
+    @@boxed_self : Void* = Pointer(Void).null
+
+    # ---------------------------------------------------------------------------------------
+
     # "Class-global" helper variable to facilitate device discovery.
     @@ddev : Device? = nil
 
@@ -47,74 +60,185 @@ module IoTivity
     # Methods
     # =========================================================================
 
-    # Triggers an invocation of `oc_do_ip_discovery` if *resource_type* is
-    # set to a String, or `oc_do_ip_discovery_all` otherwise.
-    def discover(resource_type : String? = nil)
-      if resource_type
-        OC.do_ip_discovery resource_type, ->Client.discovery_cb, Box.box(self.as(Client))
-      else
-        OC.do_ip_discovery_all ->Client.discovery_all_cb, Box.box(self.as(Client))
+    macro included
+
+      # Searches the network for a *resource_type* by invoking
+      # `oc_do_ip_discovery`.
+      # When a resource is found that has the *resource_type* listed in its
+      # `rt` array, a `Discovery` event is triggered.
+      def discover(resource_type : String)
+        OC.do_ip_discovery resource_type,
+          ->(di, uri, rts, ifs, eps, bm, user_data) {
+            str = String.new di
+            uuid = UUID.new str.lchop("ocf://")
+            res = IoTivity::Resource.new \
+              uri: String.new(uri),
+              types: [] of String, #TODO
+              interfaces: IoTivity::Interface.new(ifs),
+              properties: IoTivity::ResourceProperties::Discoverable #TODO
+            endpoints = IoTivity::ListOfEndpoints.new eps
+            client = Box({{@type}}).unbox(user_data)
+            client.emit Discovery, uuid, res, endpoints
+            return OC::DiscoveryFlags::ContinueDiscovery #TODO
+          },
+          Box.box(self.as({{@type}}))
       end
-    end
 
-    # ---------------------------------------------------------------------------------------
+      # ---------------------------------------------------------------------------------------
 
-    # Triggers an invocation of `oc_obt_discover_owned_devices` and
-    # emits `Discovery` events for each found device.
-    def discover_owned
-      OC.obt_discover_owned_devices ->(uuid : OC::UUID*, eps : OC::Endpoint*, data : Void*){
-        dev = Device.new( UUID.new(uuid.value.id), eps )
-        client = Box(Client).unbox(data)
-        client.discovered << dev
-        client.emit Discovery, dev
-      }, Box.box(self.as(Client))
-    end
+      # Searches the network for all available resouces by invoking
+      # `oc_do_ip_discovery_all`.
+      # When a resource is found, a `Discovery` event is triggered.
+      def discover_all
+        OC.do_ip_discovery_all \
+          ->(di, uri, rts, ifs, eps, bm, more_cbs, user_data) {
+            str = String.new di
+            uuid = UUID.new str.lchop("ocf://")
+            res = IoTivity::Resource.new \
+              uri: String.new(uri),
+              types: [] of String, #TODO
+              interfaces: IoTivity::Interface.new(ifs),
+              properties: IoTivity::ResourceProperties::Discoverable #TODO
+            endpoints = IoTivity::ListOfEndpoints.new eps
+            client = Box({{@type}}).unbox(user_data)
+            client.emit Discovery, uuid, res, endpoints
+            return OC::DiscoveryFlags::ContinueDiscovery #TODO
+         },
+         Box.box(self.as({{@type}}))
+      end
 
-    # ---------------------------------------------------------------------------------------
+      # ---------------------------------------------------------------------------------------
 
-    # Triggers an invocation of `oc_obt_discover_unowned_devices` and
-    # emits `Discovery` events for each found device.
-    def discover_unowned
-      OC.obt_discover_unowned_devices ->(uuid : OC::UUID*, eps : OC::Endpoint*, data : Void*){
-        dev = Device.new( UUID.new(uuid.value.id), eps )
-        client = Box(Client).unbox(data)
-        client.discovered << dev
-        client.emit Discovery, dev
-      }, Box.box(self.as(Client))
-    end
+      # Sends a GET request via an invocation of `oc_do_get` and returns
+      # the response.
+      def get(uri, from endpoints : IoTivity::ListOfEndpoints, query = nil, qos = OC::QoS::Low)
+        sent = OC.do_get uri, endpoints.eps, query,
+          ->(response : OC::ClientResponse*){
+            r = response.value
+            client = Box({{@type}}).unbox r.user_data
+            client.emit Response, r.endpoint, r.code, r.payload
+          },
+          qos, Box.box(self)
 
-    # ---------------------------------------------------------------------------------------
+        if sent >= 0
+          Log.info { "Sent GET request" }
+        else
+          Log.warn { "Failed to send GET request" }
+        end
 
-    # Sends a GET request via an invocation of `oc_do_get` and returns
-    # the response.
-    def get(uri, from device, query = nil, qos = OC::QoS::Low)
-      OC.do_get uri, device.endpoints, query, ->(response : OC::ClientResponse*){
-                  r = response.value
-                  client = Box(Client).unbox r.user_data
-                  client.emit Response, r.endpoint, r.code, r.payload
-                },
-                qos, Box.box(self)
-      once Response do |e|
-        puts "Response arrived - code #{e.code}"
-        if e.code.ok?
-          puts "Received payload:"
-          rep = e.payload
-          puts "Determining JSON bufsize..."
-          size = OC.rep_to_json rep, nil, 0, true
-          puts "Need #{size + 1} bytes"
-          buf = Pointer(UInt8).malloc(size + 1)
-          OC.rep_to_json rep, buf, size + 1, true
-          puts String.new(buf)
+        once Response do |e|
+          puts "Response arrived - code #{e.code}"
+          if e.code.ok?
+            puts "Received payload:"
+            rep = e.payload
+            puts "Determining JSON bufsize..."
+            size = OC.rep_to_json rep, nil, 0, 1
+            puts "Need #{size + 1} bytes"
+            buf = Pointer(UInt8).malloc(size + 1)
+            OC.rep_to_json rep, buf, size + 1, 1
+            puts String.new(buf)
+          end
         end
       end
+
+      # ---------------------------------------------------------------------------------------
+
+      # Sends a POST request and returns the response.
+      def post(payload, to uri, at endpoints : IoTivity::ListOfEndpoints, query = nil, qos = OC::QoS::Low)
+        iter = endpoints.each
+        iter.each do |ep|
+          puts "One EP has flags: #{ep.flags}, addr: #{ep.addr.address}, port: #{ep.addr.port}"
+          client = UDPSocket.new ep.flags.ipv6? ? Socket::Family::INET6
+                                                : Socket::Family::INET
+          # client.connect ep.addr
+          client.send payload, to: ep.addr
+          client.close
+          break
+        end
+        # init = OC.init_post uri, endpoints.eps, query,
+        #   ->(response : OC::ClientResponse*){
+        #     r = response.value
+        #     client = Box({{@type}}).unbox r.user_data
+        #     client.emit Response, r.endpoint, r.code, r.payload
+        #   },
+        #   qos, Box.box(self)
+        #
+        # if init >= 0
+        #   Log.info { "Initiated POST" }
+        #
+        #   rep = Pointer(OC::Rep).null
+        #   parsed = OC.parse_rep payload, payload.size, pointerof(rep)
+        #   if parsed >= 0
+        #     Log.info { "Successfully parsed JSON into representation" }
+        #     puts "Double checking: result of oc_rep_to_json is"
+        #     size = OC.rep_to_json rep, nil, 0, 1
+        #     puts "Need #{size + 1} bytes"
+        #     buf = Pointer(UInt8).malloc(size + 1)
+        #     OC.rep_to_json rep, buf, size + 1, 1
+        #     puts String.new(buf)
+        #     if OC.do_post >= 0
+        #       Log.info { "Sent POST request" }
+        #     else
+        #       Log.warn { "Could not send POST" }
+        #     end
+        #
+        #   else
+        #     Log.warn { "Error parsing payload JSON" }
+        #   end
+        #
+        # else
+        #   Log.warn { "Failed to initiate POST request" }
+        # end
+
+        once Response do |e|
+          puts "Response arrived - code #{e.code}"
+          if e.code.ok?
+            puts "Received payload:"
+            rep = e.payload
+            puts "Determining JSON bufsize..."
+            size = OC.rep_to_json rep, nil, 0, 1
+            puts "Need #{size + 1} bytes"
+            buf = Pointer(UInt8).malloc(size + 1)
+            OC.rep_to_json rep, buf, size + 1, 1
+            puts String.new(buf)
+          end
+        end
+      end
+
+    end # macro included
+
+    # ---------------------------------------------------------------------------------------
+
+    def discover_myself
+      puts "Retrieving my own credentials..."
+      ptr = OC.obt_retrieve_own_creds
+      creds = ptr.value
+      oc_uuid = creds.rowneruuid.id
+      @myself = IoTivity::Device.new \
+        uuid: UUID.new(oc_uuid),
+        endpoints: Pointer(OC::Endpoint).null
+      puts "UUID of myself is #{myself.uuid.colorize.bold.yellow}"
+      ptr = OC.core_get_device_id(0)
+      u = ptr.value
+      uu = UUID.new u.id
+      puts "For comparison: OC.core_get_device_id returns #{uu.colorize.bold.yellow}"
     end
 
     # ---------------------------------------------------------------------------------------
 
     # Sets up and runs the IoTivity client.
-    def run
-      # This is basically the Crystal translation of the C main() function
-      # of IoTivity's example "apps/client_linux.c"
+    # *storage_dir* should name a path - either absolute or relative to the
+    # current working directory - in which IoTivity will load/store credentials,
+    # certificates and authentication info.
+    def run_client(storage_dir)
+      if storage_dir.is_a? Path
+        storage_dir = storage_dir.to_s
+      end
+
+      @@boxed_self = Box.box self
+
+      # What follows is basically the Crystal translation of the C main()
+      # function of IoTivity's example "apps/client_linux.c"
 
       # Register signal handler for Ctrl+C abortion with proper cleanup
       Signal::INT.trap do
@@ -123,25 +247,41 @@ module IoTivity
 
       puts "Set up an OCF Client..."
 
-      LibIoTivity.on_discovery     = ->Client.discovery_cb
-      LibIoTivity.on_discovery_all = ->Client.discovery_all_cb
+      # LibIoTivity.on_discovery     = ->Client.discovery_cb
+      # LibIoTivity.on_discovery_all = ->Client.discovery_all_cb
 
       # initialize the handlers structure
       handler = OC::Handler.new \
         init: ->{
-          ret = OC.init_platform("Mastory GmbH", nil, nil) \
-              | OC.add_device("/oic/d", "oic.wk.d", "Generic Client", "ocf.1.0.0",
-                               "ocf.res.1.3.0", nil, nil)
+          puts "Init callback"
+          ip = OC.init_platform("ocf", nil, nil)
+          ret = OC.add_device("/oic/d",
+                              "oic.d.dashboard",
+                              "Dashboard",
+                              "ocf.2.0.5",
+                              "ocf.res.1.3.0, ocf.sh.1.3.0",
+                              ->(data : Void*) {
+                                puts "Device added successfully (this is the callback)"
+                                # puts "Retrieving my own credentials..."
+                              #   ptr = OC.obt_retrieve_own_creds
+                              #   creds = ptr.value
+                              #   oc_uuid = creds.rowneruuid.id
+                              #   client = Box(IoTivity::Client).unbox data
+                              #   client.myself = IoTivity::Device.new \
+                              #     uuid: UUID.new(oc_uuid),
+                              #     endpoints: Pointer(OC::Endpoint).null
+                              },
+                              @@boxed_self
+                             )
+          puts "Called init_platform (ret: #{ip}) and add_device (ret: #{ret})"
           ret
         },
-        signal_event_loop:  ->{},
-        requests_entry: ->{
-          OC.obt_init
-        }
+        signal_event_loop: ->{},
+        requests_entry:    ->{}
 
       # #ifdef OC_SECURITY
-      puts "Initialize Secure Resources\n"
-      OC.storage_config "./client_creds"
+      puts "Initialize Secure Resources"
+      OC.storage_config storage_dir
       # #endif /* OC_SECURITY */
 
       # #ifdef OC_SECURITY
@@ -152,9 +292,10 @@ module IoTivity
       # oc_set_random_pin_callback(random_pin_cb, NULL);
       # #endif /* OC_SECURITY */
 
-      OC.set_con_res_announced(false)
+      OC.set_con_res_announced(0)
 
       # start the stack
+      puts "Calling oc_main_init"
       init = OC.main_init(pointerof(handler))
 
       if init < 0
@@ -171,74 +312,15 @@ module IoTivity
       end
 
       puts "Shutting down IoTivity..."
-      OC.obt_shutdown
+      # OC.obt_shutdown
       OC.main_shutdown
     end
 
     # -------------------------------------------------------------------------
 
     # Stops the IoTivity client.
-    def stop
+    def quit_client
       @closing = true
-    end
-
-    # =======================================================================================
-    # Callbacks
-    # =======================================================================================
-
-    # Module-level class method used as a callback for IoTivity's
-    # `oc_do_ip_discovery` function. When called upon a discovery,
-    # this method emits a `Discovery` event containing all information
-    # relevant for the discovered device.
-    def self.discovery_cb(di, uri,
-                          types : OC::StringArray,
-                          iface_mask : OC::InterfaceMask,
-                          endpoints : OC::Endpoint*,
-                          bm : OC::ResourceProperties,
-                          user_data)
-      return OC::DiscoveryFlags::ContinueDiscovery
-    end
-
-    # ---------------------------------------------------------------------------------------
-
-    # Module-level class method used as a callback for IoTivity's
-    # `oc_do_ip_discovery_all` function. When called upon a discovery,
-    # this method emits a `Discovery` event containing all information
-    # relevant for the discovered device.
-    def self.discovery_all_cb(device_id, uri,
-                              types : OC::StringArray,
-                              ifs,
-                              endpoints : OC::Endpoint*,
-                              bm : OC::ResourceProperties,
-                              more_for_this_device, user_data)
-      uuid, uri = String.new(device_id), String.new(uri)
-
-      @@ddev ||= Device.new uuid, endpoints
-      dev = @@ddev.not_nil!
-      dev.res[uri] = Resource.new interfaces: Interface.new(ifs)
-
-      if more_for_this_device.zero?
-        client = Box(Client).unbox(user_data)
-        client.discovered << dev
-        client.emit Discovery, dev
-        @@ddev = nil
-      end
-
-      return OC::DiscoveryFlags::ContinueDiscovery
-    end
-
-    # ---------------------------------------------------------------------------------------
-
-    # Module-level class method used as a callback for IoTivity's
-    # `oc_obt_perform_just_works_otm` function. It retrieves information
-    # about the success or failure of an onboarding request and updates the
-    # client's `#onboard?` property accordingly.
-    def self.onboarding_cb(uuid : OC::UUID*, status : LibC::Int, user_data : Void*)
-      if status >= 0
-        puts "Successfully performed OTM on device with UUID"
-      else
-        puts "ERROR performing ownership transfer on device"
-      end
     end
 
     # =======================================================================================
