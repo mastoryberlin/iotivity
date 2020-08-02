@@ -5,7 +5,8 @@ require "./helper"
 # =============================================================================
 
 @[Link(ldflags: "-DOC_CLIENT -DOC_SERVER -DNO_MAIN -DOC_PKI -DOC_SECURITY -DOC_DYNAMIC_ALLOCATION \
-                 -liotivity-lite-client-server")]
+                 -I/home/pi/iot-lite/iotivity-lite -I/home/pi/iot-lite/iotivity-lite/include \
+                 -I/home/pi/iot-lite/iotivity-lite/port/linux -liotivity-lite-client-server /tmp/helper.c")]
 lib OC
 
   # =======================================================================================
@@ -124,6 +125,56 @@ lib OC
     Ignore
     PingTimeout
   end
+
+  # enum CborError
+  #   CborNoError = 0
+  #
+  #   # errors in all modes
+  #   CborUnknownError
+  #   CborErrorUnknownLength         # request for length in array, map, or string with indeterminate length
+  #   CborErrorAdvancePastEOF
+  #   CborErrorIO
+  #
+  #   # parser errors streaming errors
+  #   CborErrorGarbageAtEnd = 256
+  #   CborErrorUnexpectedEOF
+  #   CborErrorUnexpectedBreak
+  #   CborErrorUnknownType           # can only happen in major type 7
+  #   CborErrorIllegalType           # type not allowed here
+  #   CborErrorIllegalNumber
+  #   CborErrorIllegalSimpleType     # types of value less than 32 encoded in two bytes
+  #
+  #   # parser errors in strict mode parsing only
+  #   CborErrorUnknownSimpleType = 512
+  #   CborErrorUnknownTag
+  #   CborErrorInappropriateTagForType
+  #   CborErrorDuplicateObjectKeys
+  #   CborErrorInvalidUtf8TextString
+  #   CborErrorExcludedType
+  #   CborErrorExcludedValue
+  #   CborErrorImproperValue
+  #   CborErrorOverlongEncoding
+  #   CborErrorMapKeyNotString
+  #   CborErrorMapNotSorted
+  #   CborErrorMapKeysNotUnique
+  #
+  #   # encoder errors
+  #   CborErrorTooManyItems = 768
+  #   CborErrorTooFewItems
+  #
+  #   # internal implementation errors
+  #   CborErrorDataTooLarge = 1024
+  #   CborErrorNestingTooDeep
+  #   CborErrorUnsupportedType
+  #
+  #   # errors in converting to JSON
+  #   CborErrorJsonObjectKeyIsAggregate = 1280
+  #   CborErrorJsonObjectKeyNotString
+  #   CborErrorJsonNotImplemented
+  #
+  #   CborErrorOutOfMemory = (int) (~0U / 2 + 1)
+  #   CborErrorInternalError = (int) (~0U / 2)    # INT_MAX on two's complement machines
+  # end
 
   # =======================================================================================
   # Structs
@@ -287,6 +338,26 @@ lib OC
     AllPublic = 0x10
   end
 
+  # struct CoapTransaction
+  #   next : CoapTransaction*
+  #   mid : UInt16
+  #   retrans_timer : ETimer
+  #   retrans_counter : UInt8
+  #   message : Message*
+  # end
+
+  union CborEncoderDataUnion
+    ptr : UInt8*
+    bytes_needed : LibC::SizeT
+  end
+
+  struct CborEncoder
+    data : CborEncoderDataUnion
+    end_of_data : UInt8* # this member is named "end" in C struct
+    remaining : LibC::SizeT
+    flags : LibC::Int
+  end
+
   # =======================================================================================
   # Function bindings
   # =======================================================================================
@@ -311,6 +382,17 @@ lib OC
   fun rep_to_json = oc_rep_to_json(rep : Rep*, buf : LibC::Char*, buf_size : LibC::SizeT, pretty_print : LibC::Int) : LibC::SizeT
   fun parse_rep = oc_parse_rep(in_payload : LibC::Char*, payload_size : LibC::Int, out_rep : Rep**) : LibC::Int
 
+  fun jni_begin_root_object() : CborEncoder*
+  fun jni_rep_end_root_object() : Void
+  fun jni_rep_set_boolean(object : CborEncoder*, key : LibC::Char*, value : LibC::Int) : Void
+  fun jni_rep_set_long(object : CborEncoder*, key : LibC::Char*, value : Int64) : Void
+  fun jni_rep_set_double(object : CborEncoder*, key : LibC::Char*, value : LibC::Double) : Void
+  fun jni_rep_set_text_string(object : CborEncoder*, key : LibC::Char*, value : LibC::Char*) : Void
+  fun jni_rep_set_array(object : CborEncoder*, key : LibC::Char*) : CborEncoder*
+  fun jni_rep_close_array(parent : CborEncoder*, arrayObject : CborEncoder*) : Void
+  fun jni_rep_open_object(object : CborEncoder*, key : LibC::Char*) : CborEncoder*
+  fun jni_rep_close_object(parent : CborEncoder*, object : CborEncoder*) : Void
+
   fun obt_init = oc_obt_init() : LibC::Int
   fun obt_discover_owned_devices = oc_obt_discover_owned_devices(cb : ObtDiscoveryCb, data : Void*) : LibC::Int
   fun obt_discover_unowned_devices = oc_obt_discover_unowned_devices(cb : ObtDiscoveryCb, data : Void*) : LibC::Int
@@ -329,5 +411,8 @@ lib OC
   fun obt_ace_resource_set_wc = oc_obt_ace_resource_set_wc(resource : ACERes*, wc : ACEWildcard) : Void
   fun obt_ace_add_permission = oc_obt_ace_add_permission(ace : SecACE*, permission : ACEPermissions) : Void
   fun obt_free_ace = oc_obt_free_ace(ace : SecACE*) : Void
+
+  # fun coap_set_payload(packet : Void*, payload : Void*, length : LibC::SizeT) : LibC::Int
+  # fun coap_send_transaction(t : CoapTransaction*) : Void
 
 end

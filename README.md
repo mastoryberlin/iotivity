@@ -21,6 +21,15 @@ standard for IoT device interoperability.
 
 ```crystal
 require "iotivity"
+
+class MyClientApp
+  include IoTivity::Client
+  property server_endpoints : OC::Endpoint* = Pointer(OC::Endpoint).null
+
+end
+
+app = MyClientApp.new
+app.run_client storage_dir: "./creds"
 ```
 
 TODO: Write usage instructions here

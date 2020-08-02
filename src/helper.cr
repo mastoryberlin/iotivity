@@ -4,7 +4,7 @@ require "./bindings"
 # Helper C bindings for OCF/IoTivity
 # =============================================================================
 
-@[Link(ldflags: "-I/home/pi/iot-lite/iotivity-lite -I/home/pi/iot-lite/iotivity-lite/include -I/home/pi/iot-lite/iotivity-lite/port/linux src/helper.c")]
+@[Link(ldflags: "-I/home/pi/iot-lite/iotivity-lite -I/home/pi/iot-lite/iotivity-lite/include -I/home/pi/iot-lite/iotivity-lite/port/linux /tmp/helper.c")]
 lib Helper
 
   # =======================================================================================
