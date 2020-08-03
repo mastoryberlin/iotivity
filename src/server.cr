@@ -1,9 +1,24 @@
+require "event_handler"
+require "./resource"
 require "./bindings"
 
 module IoTivity
 
   # An IoTivity server.
   module Server
+    include EventHandler
+
+    # =======================================================================================
+    # Events
+    # =======================================================================================
+
+    event Post, uri : String, payload : String
+
+    # =======================================================================================
+    # Properties
+    # =======================================================================================
+
+    property resources = [] of Resource
 
     # =========================================================================
     # Instance variables
@@ -41,7 +56,23 @@ module IoTivity
         handler = OC::Handler.new \
           init:               ->Helper.app_init,
           signal_event_loop:  ->{},
-          register_resources: ->Helper.register_resources
+          register_resources: ->{
+            puts %{Register Resource with local path "/led"}
+            led = IoTivity::Resource.new \
+              name: "LED",
+              uri:  "/led",
+              types:["oic.r.switch.binary"],
+              interfaces: IoTivity::Interface.flags( Baseline, A ),
+              properties: IoTivity::ResourceProperties.flags( Discoverable, Periodic, Observable )
+
+            led.default_interface = IoTivity::Interface::Baseline
+            led.on_get  = ->(r : OC::Request*, i : IoTivity::Interface) { Helper.get_led(r, i, nil) }
+            led.on_post = ->(r : OC::Request*, i : IoTivity::Interface) { Helper.post_led(r, i, nil) }
+
+            led.add
+
+            Helper.register_resources
+          }
 
         # #ifdef OC_SECURITY
         puts "Initialize Secure Resources\n"

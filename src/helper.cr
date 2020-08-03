@@ -4,7 +4,6 @@ require "./bindings"
 # Helper C bindings for OCF/IoTivity
 # =============================================================================
 
-@[Link(ldflags: "-I/home/pi/iot-lite/iotivity-lite -I/home/pi/iot-lite/iotivity-lite/include -I/home/pi/iot-lite/iotivity-lite/port/linux /tmp/helper.c")]
 lib Helper
 
   # =======================================================================================
@@ -32,5 +31,8 @@ lib Helper
   fun app_init() : LibC::Int
   fun register_resources() : Void
   fun factory_presets_cb(device : LibC::SizeT, data : Void*) : Void
+
+  fun get_led(request : OC::Request*, interfaces : IoTivity::Interface, user_data : Void*) : Void
+  fun post_led(request : OC::Request*, interfaces : IoTivity::Interface, user_data : Void*) : Void
 
 end
