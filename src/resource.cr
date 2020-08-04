@@ -27,95 +27,87 @@ module IoTivity
   # ---------------------------------------------------------------------------------------
 
   # An IoTivity resource.
-  class Resource
+  struct Resource
 
     # =======================================================================================
     # Properties
     # =======================================================================================
 
-    def default_interface=(i : Interface)
-      OC.resource_set_default_interface @ptr, i
-    end
+    # The URI used to locate this resource.
+    getter uri : String
 
     # ---------------------------------------------------------------------------------------
 
-    getter on_get : Proc(OC::Request*, Interface, Void)? = nil
-    def on_get=(get_handler : OC::Request*, Interface -> Void)
-      @on_get = get_handler
-      OC.resource_set_request_handler @ptr, OC::Method::GET,
-        ->(request, interface, data){
-          myself = Box(self).unbox data
-          myself.on_get.not_nil!.call request, interface
-        }, Box.box self
-    end
+    # A list of all resource types of this resource.
+    getter types : Array(String)
 
     # ---------------------------------------------------------------------------------------
 
-    getter on_post : Proc(OC::Request*, Interface, Void)? = nil
-    def on_post=(post_handler : OC::Request*, Interface -> Void)
-      @on_post = post_handler
-      OC.resource_set_request_handler @ptr, OC::Method::POST,
-        ->(request, interface, data){
-          myself = Box(self).unbox data
-          myself.on_post.not_nil!.call request, interface
-        }, Box.box self
-    end
+    # The interfaces supported by this resource
+    getter interfaces : Interface
 
     # ---------------------------------------------------------------------------------------
 
-    getter on_put : Proc(OC::Request*, Interface, Void)? = nil
-    def on_put=(put_handler : OC::Request*, Interface -> Void)
-      @on_put = put_handler
-      OC.resource_set_request_handler @ptr, OC::Method::PUT,
-        ->(request, interface, data){
-          myself = Box(self).unbox data
-          myself.on_put.not_nil!.call request, interface
-        }, Box.box self
-    end
+    getter default_interface : Interface
 
     # ---------------------------------------------------------------------------------------
 
-    getter on_delete : Proc(OC::Request*, Interface, Void)? = nil
-    def on_delete=(delete_handler : OC::Request*, Interface -> Void)
-      @on_delete = delete_handler
-      OC.resource_set_request_handler @ptr, OC::Method::DELETE,
-        ->(request, interface, data){
-          myself = Box(self).unbox data
-          myself.on_delete.not_nil!.call request, interface
-        }, Box.box self
-    end
+    getter properties : ResourceProperties
 
-    # =======================================================================================
-    # Instance variables
-    # =======================================================================================
+    # ---------------------------------------------------------------------------------------
 
-    @ptr : OC::Resource* = Pointer(OC::Resource).null
+    forward_missing_to @properties
 
     # =======================================================================================
     # Constructor
     # =======================================================================================
 
-    def initialize(@name : String, @uri : String, @types : Array(String),
-                   @interfaces : Interface, @properties : ResourceProperties,
-                   *, device = 0)
-      res = OC.new_resource name, uri, types.size, device
-      @types.each { |t| OC.resource_bind_resource_type res, t }
-      @interfaces.each { |i| OC.resource_bind_resource_interface res, i }
-      # OC.resource_set_default_interface res, OC_IF_RW
-      OC.resource_set_discoverable res, @properties.discoverable?
-      OC.resource_set_periodic_observable res, @properties.periodic? && @properties.observable?
-      @ptr = res
-    end
+    def initialize(@uri, @types,
+                   interfaces : Interface | Array(String),
+                   default_interface : Interface | String = "",
+                   @properties = ResourceProperties::Discoverable)
 
-    # =======================================================================================
-    # Methods
-    # =======================================================================================
-
-    def add
-      ret = OC.add_resource(@ptr)
-      if ret.zero?
-        raise "ERROR: Could not add resource #{@name} to IoTivity stack (code #{ret})"
+      if interfaces.is_a? Interface
+        @interfaces = interfaces
+      else # Array(String)
+        @interfaces = Interface::None
+        interfaces.each do |i|
+          case i.lchop("oic.if.")
+          when "baseline" then @interfaces |= Interface::Baseline
+          when "ll"       then @interfaces |= Interface::LL
+          when "b"        then @interfaces |= Interface::B
+          when "r"        then @interfaces |= Interface::R
+          when "rw"       then @interfaces |= Interface::RW
+          when "a"        then @interfaces |= Interface::A
+          when "s"        then @interfaces |= Interface::S
+          when "create"   then @interfaces |= Interface::Create
+          end
+        end
       end
+
+      if default_interface.is_a? Interface
+        @default_interface = default_interface
+      else # String
+        if default_interface.empty?
+          if interfaces.is_a?(Array) && !interfaces.empty?
+            default_interface = interfaces.first
+          end
+        end
+
+        @default_interface = \
+          case default_interface.lchop("oic.if.")
+          when "baseline" then Interface::Baseline
+          when "ll"       then Interface::LL
+          when "b"        then Interface::B
+          when "r"        then Interface::R
+          when "rw"       then Interface::RW
+          when "a"        then Interface::A
+          when "s"        then Interface::S
+          when "create"   then Interface::Create
+          else                 Interface::None
+          end
+      end
+
     end
 
   end

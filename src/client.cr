@@ -8,8 +8,8 @@ require "./device"
 
 module IoTivity
 
-  # Mix-in to create an IoTivity client.
-  module Client
+  # An IoTivity client.
+  class Client
     include EventHandler
 
     # =======================================================================================
@@ -46,197 +46,132 @@ module IoTivity
     # Indicates the client is about to quit.
     getter? closing = false
 
-    # =======================================================================================
-    # Class variables
-    # =======================================================================================
-
-    @@boxed_self : Void* = Pointer(Void).null
-
-    # ---------------------------------------------------------------------------------------
-
-    # "Class-global" helper variable to facilitate device discovery.
-    @@ddev : Device? = nil
-
     # =========================================================================
     # Methods
     # =========================================================================
 
-    macro included
+    # Searches the network for a *resource_type* by invoking
+    # `oc_do_ip_discovery`.
+    # When a resource is found that has the *resource_type* listed in its
+    # `rt` array, a `Discovery` event is triggered.
+    def discover(resource_type : String)
+      OC.do_ip_discovery resource_type,
+        ->(di, uri, rts, ifs, eps, bm, user_data) {
+          str = String.new di
+          uuid = UUID.new str.lchop("ocf://")
+          res = IoTivity::Resource.new \
+            uri: String.new(uri),
+            types: [] of String, #TODO
+            interfaces: IoTivity::Interface.new(ifs),
+            properties: IoTivity::ResourceProperties::Discoverable #TODO
+          endpoints = IoTivity::ListOfEndpoints.new eps
+          client = Box(self).unbox(user_data)
+          client.emit Discovery, uuid, res, endpoints
+          return OC::DiscoveryFlags::ContinueDiscovery #TODO
+        }, Helper.pClient
+    end
 
-      # Searches the network for a *resource_type* by invoking
-      # `oc_do_ip_discovery`.
-      # When a resource is found that has the *resource_type* listed in its
-      # `rt` array, a `Discovery` event is triggered.
-      def discover(resource_type : String)
-        OC.do_ip_discovery resource_type,
-          ->(di, uri, rts, ifs, eps, bm, user_data) {
-            str = String.new di
-            uuid = UUID.new str.lchop("ocf://")
-            res = IoTivity::Resource.new \
-              uri: String.new(uri),
-              types: [] of String, #TODO
-              interfaces: IoTivity::Interface.new(ifs),
-              properties: IoTivity::ResourceProperties::Discoverable #TODO
-            endpoints = IoTivity::ListOfEndpoints.new eps
-            client = Box({{@type}}).unbox(user_data)
-            client.emit Discovery, uuid, res, endpoints
-            return OC::DiscoveryFlags::ContinueDiscovery #TODO
-          },
-          Box.box(self.as({{@type}}))
+    # ---------------------------------------------------------------------------------------
+
+    # Searches the network for all available resouces by invoking
+    # `oc_do_ip_discovery_all`.
+    # When a resource is found, a `Discovery` event is triggered.
+    def discover_all
+      OC.do_ip_discovery_all \
+        ->(di, uri, rts, ifs, eps, bm, more_cbs, user_data) {
+          str = String.new di
+          uuid = UUID.new str.lchop("ocf://")
+          res = IoTivity::Resource.new \
+            uri: String.new(uri),
+            types: [] of String, #TODO
+            interfaces: IoTivity::Interface.new(ifs),
+            properties: IoTivity::ResourceProperties::Discoverable #TODO
+          endpoints = IoTivity::ListOfEndpoints.new eps
+          client = Box(self).unbox(user_data)
+          client.emit Discovery, uuid, res, endpoints
+          return OC::DiscoveryFlags::ContinueDiscovery #TODO
+       }, Helper.pClient
+    end
+
+    # ---------------------------------------------------------------------------------------
+
+    # Sends a GET request via an invocation of `oc_do_get` and returns
+    # the response.
+    def get(uri, from endpoints : IoTivity::ListOfEndpoints, query = nil, qos = OC::QoS::Low)
+      sent = OC.do_get uri, endpoints.eps, query,
+        ->(response : OC::ClientResponse*){
+          r = response.value
+          client = Box(self).unbox r.user_data
+          client.emit Response, r.endpoint, r.code, r.payload
+        },
+        qos, Helper.pClient
+
+      if sent >= 0
+        Log.info { "Sent GET request" }
+      else
+        Log.warn { "Failed to send GET request" }
       end
 
-      # ---------------------------------------------------------------------------------------
-
-      # Searches the network for all available resouces by invoking
-      # `oc_do_ip_discovery_all`.
-      # When a resource is found, a `Discovery` event is triggered.
-      def discover_all
-        OC.do_ip_discovery_all \
-          ->(di, uri, rts, ifs, eps, bm, more_cbs, user_data) {
-            str = String.new di
-            uuid = UUID.new str.lchop("ocf://")
-            res = IoTivity::Resource.new \
-              uri: String.new(uri),
-              types: [] of String, #TODO
-              interfaces: IoTivity::Interface.new(ifs),
-              properties: IoTivity::ResourceProperties::Discoverable #TODO
-            endpoints = IoTivity::ListOfEndpoints.new eps
-            client = Box({{@type}}).unbox(user_data)
-            client.emit Discovery, uuid, res, endpoints
-            return OC::DiscoveryFlags::ContinueDiscovery #TODO
-         },
-         Box.box(self.as({{@type}}))
-      end
-
-      # ---------------------------------------------------------------------------------------
-
-      # Sends a GET request via an invocation of `oc_do_get` and returns
-      # the response.
-      def get(uri, from endpoints : IoTivity::ListOfEndpoints, query = nil, qos = OC::QoS::Low)
-        sent = OC.do_get uri, endpoints.eps, query,
-          ->(response : OC::ClientResponse*){
-            r = response.value
-            client = Box({{@type}}).unbox r.user_data
-            client.emit Response, r.endpoint, r.code, r.payload
-          },
-          qos, Box.box(self)
-
-        if sent >= 0
-          Log.info { "Sent GET request" }
-        else
-          Log.warn { "Failed to send GET request" }
-        end
-
-        once Response do |e|
-          puts "Response arrived - code #{e.code}"
-          if e.code.ok?
-            puts "Received payload:"
-            rep = e.payload
-            puts "Determining JSON bufsize..."
-            size = OC.rep_to_json rep, nil, 0, 1
-            puts "Need #{size + 1} bytes"
-            buf = Pointer(UInt8).malloc(size + 1)
-            OC.rep_to_json rep, buf, size + 1, 1
-            puts String.new(buf)
-          end
+      once Response do |e|
+        puts "Response arrived - code #{e.code}"
+        if e.code.ok?
+          puts "Received payload:"
+          rep = e.payload
+          size = OC.rep_to_json rep, nil, 0, 1
+          buf = Pointer(UInt8).malloc(size + 1)
+          OC.rep_to_json rep, buf, size + 1, 1
+          puts String.new(buf)
         end
       end
+    end
 
-      # ---------------------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------------------
 
-      # Sends a POST request and returns the response.
-      def post(payload, to uri, at endpoints : IoTivity::ListOfEndpoints, query = nil, qos = OC::QoS::Low)
-        # This is the 5-step way the C example client does it:
-        # - oc_init_post(uri, endpoint, NULL, cb, LOW_QOS, NULL);
-        # - oc_rep_start_root_object();
-        # - oc_rep_set_boolean(root, state, !light_state);
-        # ...
-        # - oc_rep_end_root_object();
-        # - oc_do_post();
+    # Sends a POST request and returns the response.
+    def post(payload, to uri, at endpoints : IoTivity::ListOfEndpoints, query = nil, qos = OC::QoS::Low)
+      # This is the 5-step way the C example client does it:
+      # 1) oc_init_post(uri, endpoint, NULL, cb, LOW_QOS, NULL);
+      # 2) oc_rep_start_root_object();
+      # 3) oc_rep_set_...
+      # ...
+      # 4) oc_rep_end_root_object();
+      # 5) oc_do_post();
 
-        # io = IO::Memory.new(64)
-        # jb = JSON::Builder.new(io)
-        # payload.to_json(jb)
+      return if payload.empty?
 
-        return if payload.empty?
+      # oc_init_post(uri, endpoint, NULL, cb, LOW_QOS, NULL);
+      init = OC.init_post uri, endpoints.eps, query,
+        ->(response : OC::ClientResponse*){
+          r = response.value
+          client = Box(self).unbox r.user_data
+          client.emit Response, r.endpoint, r.code, r.payload
+        },
+        qos, Helper.pClient
 
-        # oc_init_post(uri, endpoint, NULL, cb, LOW_QOS, NULL);
-        init = OC.init_post uri, endpoints.eps, query,
-          ->(response : OC::ClientResponse*){
-            r = response.value
-            client = Box({{@type}}).unbox r.user_data
-            client.emit Response, r.endpoint, r.code, r.payload
-          },
-          qos, Box.box(self)
+      # oc_rep_start_root_object();
+      # oc_rep_set_...
+      # oc_rep_end_root_object();
+      # -> These are C macros that we replace by their
+      #    dynamic JNI counterparts:
+      prepare_cbor from: payload
 
-        # oc_rep_start_root_object();
-        # oc_rep_set_boolean(root!450ß, state, !light_state);
-        # oc_rep_end_root_object();
+      # oc_do_post();
+      OC.do_post
 
-        # These are C macros that we replace by their dynamic JNI counterparts:
-        prepare_cbor from: payload
-
-        # oc_do_post();
-        OC.do_post
-
-        # iter = endpoints.each
-        # iter.each do |ep|
-        #   puts "One EP has flags: #{ep.flags}, addr: #{ep.addr.address}, port: #{ep.addr.port}"
-        #   puts "Creating a UDPSocket"
-        #   client = UDPSocket.new ep.flags.ipv6? ? Socket::Family::INET6
-        #                                         : Socket::Family::INET
-        #   puts "Connecting to #{ep.addr}"
-        #   client.connect ep.addr
-        #   puts "Sending pl to #{ep.addr}..."
-        #   client.send payload
-        #   puts "Closing socket"
-        #   client.close
-        #   break
-        # end
-        #
-        # if init >= 0
-        #   Log.info { "Initiated POST" }
-        #
-        #   rep = Pointer(OC::Rep).null
-        #   parsed = OC.parse_rep payload, payload.size, pointerof(rep)
-        #   if parsed >= 0
-        #     Log.info { "Successfully parsed JSON into representation" }
-        #     puts "Double checking: result of oc_rep_to_json is"
-        #     size = OC.rep_to_json rep, nil, 0, 1
-        #     puts "Need #{size + 1} bytes"
-        #     buf = Pointer(UInt8).malloc(size + 1)
-        #     OC.rep_to_json rep, buf, size + 1, 1
-        #     puts String.new(buf)
-        #     if OC.do_post >= 0
-        #       Log.info { "Sent POST request" }
-        #     else
-        #       Log.warn { "Could not send POST" }
-        #     end
-        #
-        #   else
-        #     Log.warn { "Error parsing payload JSON" }
-        #   end
-        #
-        # else
-        #   Log.warn { "Failed to initiate POST request" }
-        # end
-
-        once Response do |e|
-          puts "Response arrived - code #{e.code}"
-          if e.code.ok?
-            puts "Received payload:"
-            rep = e.payload
-            puts "Determining JSON bufsize..."
-            size = OC.rep_to_json rep, nil, 0, 1
-            puts "Need #{size + 1} bytes"
-            buf = Pointer(UInt8).malloc(size + 1)
-            OC.rep_to_json rep, buf, size + 1, 1
-            puts String.new(buf)
-          end
+      once Response do |e|
+        puts "Response arrived - code #{e.code}"
+        if e.code.ok?
+          puts "Received payload:"
+          rep = e.payload
+          puts "Determining JSON bufsize..."
+          size = OC.rep_to_json rep, nil, 0, 1
+          puts "Need #{size + 1} bytes"
+          buf = Pointer(UInt8).malloc(size + 1)
+          OC.rep_to_json rep, buf, size + 1, 1
+          puts String.new(buf)
         end
       end
-
-    end # macro included
+    end
 
     # ---------------------------------------------------------------------------------------
 
@@ -266,7 +201,7 @@ module IoTivity
         storage_dir = storage_dir.to_s
       end
 
-      @@boxed_self = Box.box self
+      Helper.pClient = Box.box self
 
       # What follows is basically the Crystal translation of the C main()
       # function of IoTivity's example "apps/client_linux.c"
@@ -302,7 +237,7 @@ module IoTivity
                               #     uuid: UUID.new(oc_uuid),
                               #     endpoints: Pointer(OC::Endpoint).null
                               },
-                              @@boxed_self
+                              Helper.pClient
                              )
           puts "Called init_platform (ret: #{ip}) and add_device (ret: #{ret})"
           ret

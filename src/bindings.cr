@@ -623,6 +623,7 @@ lib OC
   fun resource_set_discoverable = oc_resource_set_discoverable(resource : Resource*, state : LibC::Int) : Void
   fun resource_set_periodic_observable = oc_resource_set_periodic_observable(resource : Resource*, state : LibC::Int) : Void
   fun resource_set_request_handler = oc_resource_set_request_handler(resource : Resource*, method : Method, callback : RequestCallback, user_data : Void*) : Void
+  fun send_response = oc_send_response(request : Request*, response_code : Status) : Void
   fun set_factory_presets_cb = oc_set_factory_presets_cb(cb : FactoryPresetsCallback, data : Void*) : Void
   fun set_con_res_announced = oc_set_con_res_announced(announce	: LibC::Int) : Void
   fun storage_config = oc_storage_config(store : LibC::Char*) : LibC::Int
