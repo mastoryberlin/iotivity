@@ -65,7 +65,7 @@ module IoTivity
     def initialize(@uri, @types,
                    interfaces : Interface | Array(String),
                    default_interface : Interface | String = "",
-                   @properties = ResourceProperties::Discoverable)
+                   properties : ResourceProperties | String = ResourceProperties::Discoverable)
 
       if interfaces.is_a? Interface
         @interfaces = interfaces
@@ -108,6 +108,19 @@ module IoTivity
           end
       end
 
+      if properties.is_a? ResourceProperties
+        @properties = properties
+      else # String
+        @properties = ResourceProperties::None
+        properties.chars.each do |c|
+          case c.downcase
+          when 'd' then @properties |= ResourceProperties::Discoverable
+          when 'o' then @properties |= ResourceProperties::Observable
+          when 's' then @properties |= ResourceProperties::Secure
+          when 'p' then @properties |= ResourceProperties::Periodic
+          end
+        end
+      end
     end
 
   end

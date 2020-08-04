@@ -12,7 +12,12 @@ module IoTivity
     # Events
     # =======================================================================================
 
-    event Request,  uri : String, payload : String, status : OC::Status, response : String
+    class RequestResponse < ::EventHandler::Event
+      property status : OC::Status = OC::Status::MethodNotAllowed
+      property response : String = ""
+    end
+
+    class_record Request < RequestResponse, uri : String, payload : String
 
     class GET    < Request; end
     class POST   < Request; end
@@ -60,7 +65,12 @@ module IoTivity
             {% for uri, tup in hash %}
               # Delegate parsing of interface and resource property string to a Resource struct
               %res = IoTivity::Resource.new {{uri}}, {{tup[:rt]}}, {{tup[:if]}},
-                properties: IoTivity::ResourceProperties.flags( Discoverable, Periodic, Observable )
+                properties: \
+                  {% if tup[:props].is_a? StringLiteral %}\
+                    {{tup[:props]}}\
+                  {% else %}\
+                    IoTivity::ResourceProperties.flags( Discoverable, Periodic, Observable )\
+                  {% end %}
 
               puts %{Register Resource with local path "{{uri.id}}"}
               %p = OC.new_resource nil, {{uri}}, {{tup[:rt].size}}, 0 # <- device no
@@ -75,6 +85,8 @@ module IoTivity
                 %res.default_interface
               OC.resource_set_discoverable %p,
                 %res.discoverable? ? 1 : 0
+              OC.resource_set_observable %p,
+                %res.observable? && !%res.periodic? ? 1 : 0
               OC.resource_set_periodic_observable %p,
                 %res.periodic? && %res.observable? ? 1 : 0
 
@@ -87,8 +99,7 @@ module IoTivity
                   buf = Pointer(UInt8).malloc(size + 1)
                   OC.rep_to_json rep, buf, size + 1, 1
                   payload = String.new(buf)
-                  e = myself.emit {{method.id}}, {{uri}}, payload,
-                      OC::Status::MethodNotAllowed, "" # <- response
+                  e = myself.emit {{method.id}}, {{uri}}, payload
                   unless e.response.empty?
                     #TODO: Prepare payload for response
                   end

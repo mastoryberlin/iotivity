@@ -621,6 +621,7 @@ lib OC
   fun resource_bind_resource_type = oc_resource_bind_resource_type(resource : Resource*, type : LibC::Char*) : Void
   fun resource_set_default_interface = oc_resource_set_default_interface(resource : Resource*, iface_mask : IoTivity::Interface) : Void
   fun resource_set_discoverable = oc_resource_set_discoverable(resource : Resource*, state : LibC::Int) : Void
+  fun resource_set_observable = oc_resource_set_observable(resource : Resource*, state : LibC::Int) : Void
   fun resource_set_periodic_observable = oc_resource_set_periodic_observable(resource : Resource*, state : LibC::Int) : Void
   fun resource_set_request_handler = oc_resource_set_request_handler(resource : Resource*, method : Method, callback : RequestCallback, user_data : Void*) : Void
   fun send_response = oc_send_response(request : Request*, response_code : Status) : Void
