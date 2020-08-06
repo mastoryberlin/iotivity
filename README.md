@@ -1,4 +1,4 @@
-[![Docs](https://img.shields.io/badge/docs-available-brightgreen.svg)](https://mastoryberlin.github.io/iotivity)
+[![Docs](https://img.shields.io/badge/docs-available-brightgreen.svg)](https://mastoryberlin.github.io/iotivity/)
 
 # iotivity
 
