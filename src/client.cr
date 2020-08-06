@@ -9,7 +9,7 @@ require "./device"
 module IoTivity
 
   # An IoTivity client.
-  class Client
+  module Client
     include EventHandler
 
     # =======================================================================================
@@ -23,7 +23,7 @@ module IoTivity
     # =======================================================================================
 
     event Discovery, di : UUID, resource : Resource, endpoints : ListOfEndpoints
-    event Response, from : OC::Endpoint*, code : OC::Status, payload : OC::Rep*
+    event Response, sender : OC::Endpoint*, status : OC::Status, payload : String
 
     # =======================================================================================
     # Properties
@@ -95,14 +95,18 @@ module IoTivity
 
     # ---------------------------------------------------------------------------------------
 
-    # Sends a GET request via an invocation of `oc_do_get` and returns
-    # the response.
-    def get(uri, from endpoints : IoTivity::ListOfEndpoints, query = nil, qos = OC::QoS::Low)
+    # Sends a GET request via an invocation of `oc_do_get`.
+    # When a response from the server arrives, a `Response` event is emitted.
+    def send_GET(to uri, at endpoints : IoTivity::ListOfEndpoints, query = nil, qos = OC::QoS::Low)
       sent = OC.do_get uri, endpoints.eps, query,
-        ->(response : OC::ClientResponse*){
+        ->(response : OC::ClientResponse*) {
           r = response.value
+          rep = r.payload
+          size = OC.rep_to_json rep, nil, 0, 1
+          json = Pointer(UInt8).malloc(size + 1)
+          OC.rep_to_json rep, json, size + 1, 1
           client = Box(self).unbox r.user_data
-          client.emit Response, r.endpoint, r.code, r.payload
+          client.emit Response, r.endpoint, r.code, String.new(json)
         },
         qos, Helper.pClient
 
@@ -111,24 +115,13 @@ module IoTivity
       else
         Log.warn { "Failed to send GET request" }
       end
-
-      once Response do |e|
-        puts "Response arrived - code #{e.code}"
-        if e.code.ok?
-          puts "Received payload:"
-          rep = e.payload
-          size = OC.rep_to_json rep, nil, 0, 1
-          buf = Pointer(UInt8).malloc(size + 1)
-          OC.rep_to_json rep, buf, size + 1, 1
-          puts String.new(buf)
-        end
-      end
     end
 
     # ---------------------------------------------------------------------------------------
 
-    # Sends a POST request and returns the response.
-    def post(payload, to uri, at endpoints : IoTivity::ListOfEndpoints, query = nil, qos = OC::QoS::Low)
+    # Sends a POST request via an invocation of `oc_init_post`/`oc_do_post`.
+    # When a response from the server arrives, a `Response` event is emitted.
+    def send_POST(payload, to uri, at endpoints : IoTivity::ListOfEndpoints, query = nil, qos = OC::QoS::Low)
       # This is the 5-step way the C example client does it:
       # 1) oc_init_post(uri, endpoint, NULL, cb, LOW_QOS, NULL);
       # 2) oc_rep_start_root_object();
@@ -137,14 +130,16 @@ module IoTivity
       # 4) oc_rep_end_root_object();
       # 5) oc_do_post();
 
-      return if payload.empty?
-
       # oc_init_post(uri, endpoint, NULL, cb, LOW_QOS, NULL);
       init = OC.init_post uri, endpoints.eps, query,
-        ->(response : OC::ClientResponse*){
+        ->(response : OC::ClientResponse*) {
           r = response.value
+          rep = r.payload
+          size = OC.rep_to_json rep, nil, 0, 1
+          json = Pointer(UInt8).malloc(size + 1)
+          OC.rep_to_json rep, json, size + 1, 1
           client = Box(self).unbox r.user_data
-          client.emit Response, r.endpoint, r.code, r.payload
+          client.emit Response, r.endpoint, r.code, String.new(json)
         },
         qos, Helper.pClient
 
@@ -157,20 +152,6 @@ module IoTivity
 
       # oc_do_post();
       OC.do_post
-
-      once Response do |e|
-        puts "Response arrived - code #{e.code}"
-        if e.code.ok?
-          puts "Received payload:"
-          rep = e.payload
-          puts "Determining JSON bufsize..."
-          size = OC.rep_to_json rep, nil, 0, 1
-          puts "Need #{size + 1} bytes"
-          buf = Pointer(UInt8).malloc(size + 1)
-          OC.rep_to_json rep, buf, size + 1, 1
-          puts String.new(buf)
-        end
-      end
     end
 
     # ---------------------------------------------------------------------------------------
@@ -287,150 +268,6 @@ module IoTivity
     # Stops the IoTivity client.
     def quit_client
       @closing = true
-    end
-
-    # =======================================================================================
-    # Helper functions
-    # =======================================================================================
-
-    private def prepare_cbor(from json)
-      parser = JSON::PullParser.new json
-      nesting = 0
-      is_key = false
-      key_name = ""
-      rel = [] of OC::CborEncoder*
-      log = Log.for("Parsing JSON -> CBOR")
-
-      loop do
-        log.context.set is_key: is_key,
-                        key_name: key_name,
-                        nesting: nesting,
-                        rel_no: rel.size
-
-        case parser.kind
-        when .null?
-          log.info { "Next entry is a null value" }
-          null = parser.read_null
-          if is_key
-            raise "CBOR Format Error: Key string expected but got Null"
-          else
-            raise "CBOR Format Error: Null values are not supported"
-          end
-
-        when .bool?
-          log.info { "Next entry is a boolean" }
-          bool = parser.read_bool
-          log.info { "Read #{bool}" }
-
-          if is_key
-            raise "CBOR Format Error: Key string expected but got Bool"
-          else
-            log.info &.emit "Calling OC.jni_rep_set_boolean rel.last", key_name: key_name, value: bool
-            OC.jni_rep_set_boolean rel.last, key_name, bool
-            is_key = true
-          end
-
-        when .int?
-          log.info { "Next entry is an integer" }
-          int = parser.read_int
-          log.info { "Read #{int}" }
-
-          if is_key
-            raise "CBOR Format Error: Key string expected but got Int #{int}"
-          else
-            log.info &.emit "Calling OC.jni_rep_set_long rel.last", key_name: key_name, value: int
-            OC.jni_rep_set_long rel.last, key_name, int
-            is_key = true
-          end
-
-        when .float?
-          log.info { "Next entry is a floating-point value" }
-          float = parser.read_float
-          log.info { "Read #{float}" }
-
-          if is_key
-            raise "CBOR Format Error: Key string expected but got Float"
-          else
-            log.info &.emit "Calling OC.jni_rep_set_double rel.last", key_name: key_name, value: float
-            OC.jni_rep_set_double rel.last, key_name, float
-            is_key = true
-          end
-
-        when .string?
-          log.info { "Next entry is a string" }
-          string = parser.read_string
-          log.info { "Read #{string}" }
-
-          if is_key
-            log.info { "Setting key_name->\"#{string}\", is_key->false" }
-            key_name = string
-            is_key = false
-          else
-            log.info &.emit "Calling OC.jni_rep_set_text_string rel.last", key_name: key_name, value: string
-            OC.jni_rep_set_text_string rel.last, key_name, string
-            is_key = true
-          end
-
-        when .begin_array?
-          log.info { "Next entry is a [ opening bracket" }
-          parser.read_begin_array
-          log.info { "Read beginning of array" }
-
-          log.info &.emit "Calling OC.jni_rep_set_array rel.last", key_name: key_name
-          sub = OC.jni_rep_set_array rel.last, key_name
-          rel.push sub
-          nesting += 1
-          is_key = false
-
-        when .end_array?
-          log.info { "Next entry is a ] closing bracket" }
-          parser.read_end_array
-          log.info { "Read end of array" }
-
-          sub = rel.pop
-          log.info &.emit "Calling OC.jni_rep_close_array rel.last, sub"
-          OC.jni_rep_close_array rel.last, sub
-          nesting -= 1
-          is_key = true
-
-        when .begin_object?
-          log.info { "Next entry is a { opening brace" }
-          parser.read_begin_object
-          log.info { "Read beginning of object" }
-
-          if nesting.zero?
-            log.info &.emit "Calling OC.jni_begin_root_object"
-            root = OC.jni_begin_root_object
-            rel.push root
-          else
-            log.info &.emit "Calling OC.jni_rep_open_object rel.last", key_name: key_name
-            sub = OC.jni_rep_open_object rel.last, key_name
-            rel.push sub
-          end
-          is_key = true
-          nesting += 1
-
-        when .end_object?
-          log.info { "Next entry is a } closing brace" }
-          parser.read_end_object
-          log.info { "Read end of object" }
-
-          nesting -= 1
-          if nesting.zero?
-            log.info &.emit "Calling OC.jni_rep_end_root_object"
-            OC.jni_rep_end_root_object
-          else
-            sub = rel.pop
-            log.info &.emit "Calling OC.jni_rep_close_object rel.last, sub"
-            OC.jni_rep_close_object rel.last, sub
-            is_key = true
-          end
-
-        when .eof?
-          log.info { "Reached EOF of JSON - stop parsing" }
-          break
-        end
-      end
     end
 
   end # module Client

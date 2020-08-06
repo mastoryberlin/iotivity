@@ -5,7 +5,7 @@ require "./bindings"
 module IoTivity
 
   # An IoTivity server.
-  class Server
+  module Server
     include EventHandler
 
     # =======================================================================================
@@ -34,7 +34,7 @@ module IoTivity
 
     # ---------------------------------------------------------------------------------------
 
-    macro register_resources(hash)
+    macro with_resources(hash)
       {%
         unless hash.is_a? HashLiteral
           raise "Argument 'hash' must be a Hash literal of the form
@@ -63,6 +63,10 @@ module IoTivity
           signal_event_loop:  ->{},
           register_resources: ->{
             {% for uri, tup in hash %}
+              {% if uri.is_a? Path %}
+                {% uri = uri.resolve %}
+              {% end %}
+
               # Delegate parsing of interface and resource property string to a Resource struct
               %res = IoTivity::Resource.new {{uri}}, {{tup[:rt]}}, {{tup[:if]}},
                 properties: \
@@ -101,7 +105,7 @@ module IoTivity
                   payload = String.new(buf)
                   e = myself.emit {{method.id}}, {{uri}}, payload
                   unless e.response.empty?
-                    #TODO: Prepare payload for response
+                    prepare_cbor e.response
                   end
                   OC.send_response request, e.status
                 }, Helper.pServer

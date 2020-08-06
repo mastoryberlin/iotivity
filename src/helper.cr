@@ -31,7 +31,150 @@ lib Helper
   fun register_resources() : Void
   fun factory_presets_cb(device : LibC::SizeT, data : Void*) : Void
 
-  fun get_led(request : OC::Request*, interfaces : IoTivity::Interface, user_data : Void*) : Void
-  fun post_led(request : OC::Request*, interfaces : IoTivity::Interface, user_data : Void*) : Void
+end
 
+# =======================================================================================
+# Helper Crystal functions for OCF/IoTivity
+# =======================================================================================
+
+def prepare_cbor(from json)
+  return if json.empty?
+
+  parser = JSON::PullParser.new json
+  nesting = 0
+  is_key = false
+  key_name = ""
+  rel = [] of OC::CborEncoder*
+  log = Log.for("Parsing JSON -> CBOR")
+
+  loop do
+    log.context.set is_key: is_key,
+                    key_name: key_name,
+                    nesting: nesting,
+                    rel_no: rel.size
+
+    case parser.kind
+    when .null?
+      log.info { "Next entry is a null value" }
+      null = parser.read_null
+      if is_key
+        raise "CBOR Format Error: Key string expected but got Null"
+      else
+        raise "CBOR Format Error: Null values are not supported"
+      end
+
+    when .bool?
+      log.info { "Next entry is a boolean" }
+      bool = parser.read_bool
+      log.info { "Read #{bool}" }
+
+      if is_key
+        raise "CBOR Format Error: Key string expected but got Bool"
+      else
+        log.info &.emit "Calling OC.jni_rep_set_boolean rel.last", key_name: key_name, value: bool
+        OC.jni_rep_set_boolean rel.last, key_name, bool
+        is_key = true
+      end
+
+    when .int?
+      log.info { "Next entry is an integer" }
+      int = parser.read_int
+      log.info { "Read #{int}" }
+
+      if is_key
+        raise "CBOR Format Error: Key string expected but got Int #{int}"
+      else
+        log.info &.emit "Calling OC.jni_rep_set_long rel.last", key_name: key_name, value: int
+        OC.jni_rep_set_long rel.last, key_name, int
+        is_key = true
+      end
+
+    when .float?
+      log.info { "Next entry is a floating-point value" }
+      float = parser.read_float
+      log.info { "Read #{float}" }
+
+      if is_key
+        raise "CBOR Format Error: Key string expected but got Float"
+      else
+        log.info &.emit "Calling OC.jni_rep_set_double rel.last", key_name: key_name, value: float
+        OC.jni_rep_set_double rel.last, key_name, float
+        is_key = true
+      end
+
+    when .string?
+      log.info { "Next entry is a string" }
+      string = parser.read_string
+      log.info { "Read #{string}" }
+
+      if is_key
+        log.info { "Setting key_name->\"#{string}\", is_key->false" }
+        key_name = string
+        is_key = false
+      else
+        log.info &.emit "Calling OC.jni_rep_set_text_string rel.last", key_name: key_name, value: string
+        OC.jni_rep_set_text_string rel.last, key_name, string
+        is_key = true
+      end
+
+    when .begin_array?
+      log.info { "Next entry is a [ opening bracket" }
+      parser.read_begin_array
+      log.info { "Read beginning of array" }
+
+      log.info &.emit "Calling OC.jni_rep_set_array rel.last", key_name: key_name
+      sub = OC.jni_rep_set_array rel.last, key_name
+      rel.push sub
+      nesting += 1
+      is_key = false
+
+    when .end_array?
+      log.info { "Next entry is a ] closing bracket" }
+      parser.read_end_array
+      log.info { "Read end of array" }
+
+      sub = rel.pop
+      log.info &.emit "Calling OC.jni_rep_close_array rel.last, sub"
+      OC.jni_rep_close_array rel.last, sub
+      nesting -= 1
+      is_key = true
+
+    when .begin_object?
+      log.info { "Next entry is a { opening brace" }
+      parser.read_begin_object
+      log.info { "Read beginning of object" }
+
+      if nesting.zero?
+        log.info &.emit "Calling OC.jni_begin_root_object"
+        root = OC.jni_begin_root_object
+        rel.push root
+      else
+        log.info &.emit "Calling OC.jni_rep_open_object rel.last", key_name: key_name
+        sub = OC.jni_rep_open_object rel.last, key_name
+        rel.push sub
+      end
+      is_key = true
+      nesting += 1
+
+    when .end_object?
+      log.info { "Next entry is a } closing brace" }
+      parser.read_end_object
+      log.info { "Read end of object" }
+
+      nesting -= 1
+      if nesting.zero?
+        log.info &.emit "Calling OC.jni_rep_end_root_object"
+        OC.jni_rep_end_root_object
+      else
+        sub = rel.pop
+        log.info &.emit "Calling OC.jni_rep_close_object rel.last, sub"
+        OC.jni_rep_close_object rel.last, sub
+        is_key = true
+      end
+
+    when .eof?
+      log.info { "Reached EOF of JSON - stop parsing" }
+      break
+    end
+  end
 end
