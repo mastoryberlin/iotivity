@@ -12,6 +12,8 @@ module IoTivity
     # Events
     # =======================================================================================
 
+    # Subclass Event instead of using "event" macro to enable return values
+
     class RequestResponse < ::EventHandler::Event
       property status : OC::Status = OC::Status::MethodNotAllowed
       property response : String = ""
@@ -29,7 +31,7 @@ module IoTivity
     # =======================================================================================
 
     private def main(storage_dir)
-      puts "No resources defined - set up the server using Server.register_resources before run"
+      puts "No resources defined - set up the server using Server.with_resources before run"
     end
 
     # ---------------------------------------------------------------------------------------
@@ -57,67 +59,13 @@ module IoTivity
         puts "Initialize variables to defaults"
         Helper.initialize_variables
 
-        # initialize the handlers structure
+        # Initialize the mandatory handlers structure but avoid its use
+        # because there is no way to include context information into the
+        # callback mechanism. Instead, we are setting up our own resources.
         handler = OC::Handler.new \
           init:               ->Helper.app_init,
           signal_event_loop:  ->{},
-          register_resources: ->{
-            {% for uri, tup in hash %}
-              {% if uri.is_a? Path %}
-                {% uri = uri.resolve %}
-              {% end %}
-
-              # Delegate parsing of interface and resource property string to a Resource struct
-              %res = IoTivity::Resource.new {{uri}}, {{tup[:rt]}}, {{tup[:if]}},
-                properties: \
-                  {% if tup[:props].is_a? StringLiteral %}\
-                    {{tup[:props]}}\
-                  {% else %}\
-                    IoTivity::ResourceProperties.flags( Discoverable, Periodic, Observable )\
-                  {% end %}
-
-              puts %{Register Resource with local path "{{uri.id}}"}
-              %p = OC.new_resource nil, {{uri}}, {{tup[:rt].size}}, 0 # <- device no
-
-              {% for t in tup[:rt] %}
-              OC.resource_bind_resource_type %p, {{t}}
-              {% end %}
-
-              %res.interfaces.each { |i| OC.resource_bind_resource_interface %p, i }
-
-              OC.resource_set_default_interface %p,
-                %res.default_interface
-              OC.resource_set_discoverable %p,
-                %res.discoverable? ? 1 : 0
-              OC.resource_set_observable %p,
-                %res.observable? && !%res.periodic? ? 1 : 0
-              OC.resource_set_periodic_observable %p,
-                %res.periodic? && %res.observable? ? 1 : 0
-
-              {% for method in [:GET, :POST, :PUT, :DELETE] %}
-              OC.resource_set_request_handler %p, OC::Method::{{method.id}},
-                ->(request, interface, data){
-                  myself = Box(self).unbox data
-                  rep = request.value.request_payload
-                  size = OC.rep_to_json rep, nil, 0, 1
-                  buf = Pointer(UInt8).malloc(size + 1)
-                  OC.rep_to_json rep, buf, size + 1, 1
-                  payload = String.new(buf)
-                  e = myself.emit {{method.id}}, {{uri}}, payload
-                  unless e.response.empty?
-                    prepare_cbor e.response
-                  end
-                  OC.send_response request, e.status
-                }, Helper.pServer
-              {% end %}
-
-              ret = OC.add_resource %p
-              if ret.zero?
-                raise "ERROR: Could not add resource #{%res.uri} to IoTivity stack (code #{ret})"
-              end
-
-            {% end %}
-          }
+          register_resources: ->{}
 
         # #ifdef OC_SECURITY
         puts "Initialize Secure Resources\n"
@@ -144,6 +92,57 @@ module IoTivity
 
         puts "OCF server running, waiting on incoming connections.\n"
 
+        {% for uri, tup in hash %}
+          {% if uri.is_a? Path %}
+            {% uri = uri.resolve %}
+          {% end %}
+
+          # Delegate parsing of interface and resource property string to a Resource struct
+          %res = IoTivity::Resource.new {{uri}}, {{tup[:rt]}}, {{tup[:if]}},
+            properties: \
+                IoTivity::ResourceProperties.flags( Discoverable, Periodic, Observable )
+                # Other property combinations seem to be not supported by IoTivity
+
+          puts %{Register Resource with local path "{{uri.id}}"}
+          %p = OC.new_resource nil, {{uri}}, {{tup[:rt].size}}, 0 # <- device no
+
+          {% for t in tup[:rt] %}
+          OC.resource_bind_resource_type %p, {{t}}
+          {% end %}
+
+          %res.interfaces.each { |i| OC.resource_bind_resource_interface %p, i }
+
+          OC.resource_set_default_interface %p, %res.default_interface
+          OC.resource_set_discoverable %p, 1
+          OC.resource_set_observable %p, 1
+          OC.resource_set_periodic_observable %p, 1
+
+          {% for method in [:GET, :POST, :PUT, :DELETE] %}
+          OC.resource_set_request_handler %p, OC::Method::{{method.id}},
+            ->(request, interface, data){
+              myself = Box(self).unbox data
+              rep = request.value.request_payload
+              size = OC.rep_to_json rep, nil, 0, 1
+              buf = Pointer(UInt8).malloc(size + 1)
+              OC.rep_to_json rep, buf, size + 1, 1
+              payload = String.new(buf)
+              e = myself.emit {{method.id}}, {{uri}}, payload
+              unless e.response.empty?
+                prepare_cbor e.response
+              end
+              OC.send_response request, e.status
+            }, Helper.pServer
+          {% end %}
+
+          ret = OC.add_resource %p
+          if ret.zero?
+            raise "ERROR: Could not add resource #{%res.uri} to IoTivity stack (code #{ret})"
+          else
+            @resources[{{uri}}] = %p
+          end
+
+        {% end %}
+
         # main loop
         until @quit_server
           OC.main_poll
@@ -161,10 +160,19 @@ module IoTivity
     # =========================================================================
 
     @quit_server = false
+    @resources = {} of String => OC::Resource*
 
     # =========================================================================
     # Methods
     # =========================================================================
+
+    # Emits notifications to all registered observers that the resource with
+    # URI named in *about* has changed its value.
+    def notify_observers(about uri)
+      OC.notify_observers @resources[uri]
+    end
+
+    # ---------------------------------------------------------------------------------------
 
     # Sets up and runs the IoTivity server.
     def run_server(storage_dir)
@@ -179,6 +187,7 @@ module IoTivity
 
     # --------------------------------------------------------------------------
 
+    # Stops the IoTivity server.
     def stop_server
       @quit_server = true
     end

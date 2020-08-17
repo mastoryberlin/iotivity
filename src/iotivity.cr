@@ -1,7 +1,6 @@
 require "log"
 
 require "./bindings"
-require "./device"
 require "./client"
 require "./server"
 
@@ -24,7 +23,7 @@ module IoTivity
     if content
       String.new content.as(LibC::Char*)
     else
-      "NOTHING"
+      ""
     end
   end
 

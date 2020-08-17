@@ -112,7 +112,7 @@ module IoTivity
         @properties = properties
       else # String
         @properties = ResourceProperties::None
-        properties.chars.each do |c|
+        properties.each_char do |c|
           case c.downcase
           when 'd' then @properties |= ResourceProperties::Discoverable
           when 'o' then @properties |= ResourceProperties::Observable

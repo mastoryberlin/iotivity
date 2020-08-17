@@ -24,6 +24,7 @@ module IoTivity
 
     event Discovery, di : UUID, resource : Resource, endpoints : ListOfEndpoints
     event Response, sender : OC::Endpoint*, status : OC::Status, payload : String
+    event Notification, sender : OC::Endpoint*, uri : String, payload : String
 
     # =======================================================================================
     # Properties
@@ -152,6 +153,39 @@ module IoTivity
 
       # oc_do_post();
       OC.do_post
+    end
+
+    # ---------------------------------------------------------------------------------------
+
+    def observe(uri, at endpoints : IoTivity::ListOfEndpoints, query = nil, qos = OC::QoS::Low)
+      sent = OC.do_observe uri, endpoints.eps, query,
+        ->(response : OC::ClientResponse*) {
+          r = response.value
+          rep = r.payload
+          size = OC.rep_to_json rep, nil, 0, 1
+          json = Pointer(UInt8).malloc(size + 1)
+          OC.rep_to_json rep, json, size + 1, 1
+          client, loc = Box({self, String}).unbox r.user_data
+          client.emit Notification, r.endpoint, loc, String.new(json)
+        },
+        qos, Box.box( {self, uri} )
+
+      if sent >= 0
+        Log.info { "Sent observe request" }
+      else
+        Log.warn { "Failed to send observe request" }
+      end
+    end
+
+    # ---------------------------------------------------------------------------------------
+
+    def stop_observing(uri, at endpoints : IoTivity::ListOfEndpoints)
+      sent = OC.stop_observe uri, endpoints.eps
+      if sent >= 0
+        Log.info { "Sent stop observe request" }
+      else
+        Log.warn { "Failed to send stop observe request" }
+      end
     end
 
     # ---------------------------------------------------------------------------------------

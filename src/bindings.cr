@@ -570,10 +570,13 @@ lib OC
   fun add_device = oc_add_device(uri : LibC::Char*,	rt : LibC::Char*, name : LibC::Char*, spec_version : LibC::Char*, data_model_version : LibC::Char*, add_device_cb : AddDeviceCallback, data : Void*) : LibC::Int
   fun add_resource = oc_add_resource(resource : Resource*) : LibC::Int
   fun core_get_device_id = oc_core_get_device_id(device : LibC::SizeT) : UUID*
+
   fun do_get = oc_do_get(uri : LibC::Char*, endpoint : Endpoint*, query : LibC::Char*, handler : ResponseHandler, qos : QoS, user_data : Void*) : LibC::Int
   fun do_ip_discovery = oc_do_ip_discovery(rt : LibC::Char*, handler : DiscoveryHandler, user_data : Void* ) : LibC::Int
   fun do_ip_discovery_all = oc_do_ip_discovery_all(handler : DiscoveryAllHandler, user_data : Void* ) : LibC::Int
   fun do_post = oc_do_post() : LibC::Int
+  fun do_observe = oc_do_observe(uri : LibC::Char*, endpoint : Endpoint*, query : LibC::Char*, handler : ResponseHandler, qos : QoS, user_data : Void*) : LibC::Int
+
   fun endpoint_list_copy = oc_endpoint_list_copy(dst : Endpoint**, src : Endpoint*) : Void
   fun	endpoint_to_string = oc_endpoint_to_string(endpoint : Endpoint*, endpoint_str : String*) : LibC::Int
   fun free_server_endpoints = oc_free_server_endpoints(endpoint : Endpoint*) : Void
@@ -595,6 +598,7 @@ lib OC
   fun main_shutdown = oc_main_shutdown() : Void
   fun main_poll = oc_main_poll() : ClockTime
   fun new_resource = oc_new_resource(name : LibC::Char*, uri : LibC::Char*, num_resource_types : UInt8, device : LibC::SizeT) : Resource*
+  fun notify_observers = oc_notify_observers(resource : Resource*) : LibC::Int
 
   fun obt_init = oc_obt_init() : LibC::Int
   fun obt_discover_owned_devices = oc_obt_discover_owned_devices(cb : ObtDiscoveryCb, data : Void*) : LibC::Int
@@ -627,6 +631,7 @@ lib OC
   fun send_response = oc_send_response(request : Request*, response_code : Status) : Void
   fun set_factory_presets_cb = oc_set_factory_presets_cb(cb : FactoryPresetsCallback, data : Void*) : Void
   fun set_con_res_announced = oc_set_con_res_announced(announce	: LibC::Int) : Void
+  fun stop_observe = oc_stop_observe(uri : LibC::Char*, endpoint : Endpoint*) : LibC::Int
   fun storage_config = oc_storage_config(store : LibC::Char*) : LibC::Int
 
   # fun coap_set_payload(packet : Void*, payload : Void*, length : LibC::SizeT) : LibC::Int
